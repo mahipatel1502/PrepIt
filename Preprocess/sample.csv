@@ -1,0 +1,7 @@
+Student_ID,Name,Age,Gender,Score,City,Passed
+101,Amit,20.0,Male,85,Ahmedabad,Yes
+102,Neha,,Female,90,,Yes
+103,,22.0,Female,,Surat,
+104,Rahul,21.0,,78,Vadodara,No
+105,Priya,,Female,88,,Yes
+106,,23.0,Male,,Rajkot,
