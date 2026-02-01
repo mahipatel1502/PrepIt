@@ -1,6 +1,18 @@
 // API Configuration
+// Validate API URL in production
+const getApiUrl = () => {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  
+  // Log warning in production if using localhost
+  if (process.env.NODE_ENV === 'production' && apiUrl.includes('localhost')) {
+    console.warn('⚠️ Warning: Using localhost API URL in production. Please set NEXT_PUBLIC_API_URL environment variable.')
+  }
+  
+  return apiUrl
+}
+
 export const API_CONFIG = {
-  BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  BASE_URL: getApiUrl(),
   ENDPOINTS: {
     AUTH: {
       SIGNUP: '/api/auth/signup',

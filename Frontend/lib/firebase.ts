@@ -12,6 +12,7 @@ import {
 } from "firebase/auth"
 
 // Firebase configuration from environment variables
+// Validate configuration in production
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -19,6 +20,17 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+}
+
+// Validate Firebase configuration in production
+if (process.env.NODE_ENV === 'production' && typeof window !== 'undefined') {
+  const missingVars = Object.entries(firebaseConfig)
+    .filter(([_, value]) => !value)
+    .map(([key]) => key)
+  
+  if (missingVars.length > 0) {
+    console.error('❌ Missing Firebase configuration:', missingVars)
+  }
 }
 
 // Initialize Firebase (only if it hasn't been initialized yet)
