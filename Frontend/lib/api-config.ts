@@ -14,6 +14,12 @@ export const API_CONFIG = {
     DATASET: {
       UPLOAD: '/api/dataset/upload',
     },
+    HISTORY: {
+      LIST: '/api/history',
+      DETAIL: (historyId: string) => `/api/history/${historyId}`,
+      DELETE: (historyId: string) => `/api/history/${historyId}`,
+      STATS: '/api/history/stats/summary',
+    },
   },
   TOKEN_KEY: 'prepit_auth_token',
 } as const

@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from "
 import { apiClient, getToken, removeToken, setToken } from "@/lib/api-client"
 import type { User as ApiUser } from "@/lib/api-client"
 import { signInWithGoogle, checkRedirectResult, onAuthChange, firebaseSignOut } from "@/lib/firebase"
+import { validateAndCleanToken } from "@/lib/token-utils"
 
 interface User {
   id: string
@@ -34,7 +35,7 @@ function transformUser(apiUser: ApiUser): User {
     email: apiUser.email,
     name: apiUser.full_name,
     provider: "email",
-    createdAt: apiUser.created_at,
+    createdAt: undefined, // Backend doesn't provide this for email auth
   }
 }
 
@@ -46,6 +47,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initAuth = async () => {
       console.log("🔍 Checking auth state...")
+      
+      // First, validate and clean any invalid tokens
+      validateAndCleanToken()
       
       // First check for redirect result from Google sign-in
       try {
@@ -85,14 +89,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = getToken()
       if (token) {
         console.log("🔍 Found existing token, fetching user...")
+        console.log("🔑 Token preview:", token?.substring(0, 20) + "...")
         try {
           const userData = await apiClient.getCurrentUser()
           setUser(transformUser(userData))
           console.log("✅ User loaded from backend:", userData.email)
-        } catch (error) {
+        } catch (error: any) {
           console.error("❌ Failed to fetch user:", error)
+          console.log("🗑️ Removing invalid token")
           removeToken()
         }
+      } else {
+        console.log("ℹ️ No existing token found")
       }
       setIsLoading(false)
       console.log("✅ Auth initialization complete")

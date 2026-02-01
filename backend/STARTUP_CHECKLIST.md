@@ -30,16 +30,22 @@ python setup.py
 
 **Manual Method:**
 ```bash
-# Generate a secure key
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-
 # Copy template
 cp .env.example .env
 
-# Edit .env and add:
-# - SECRET_KEY=<generated-key>
-# - FIREBASE_CREDENTIALS_PATH=<path-to-firebase-json>
+# Edit .env and add Firebase credentials:
+# Get these from Firebase Console > Project Settings > Service Accounts > Generate New Private Key
+# Then copy the values from the downloaded JSON to .env:
+FIREBASE_TYPE=service_account
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_PRIVATE_KEY_ID=your-private-key-id
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nyour-key\n-----END PRIVATE KEY-----\n"
+FIREBASE_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
+FIREBASE_CLIENT_ID=your-client-id
+FIREBASE_WEB_API_KEY=your-web-api-key
 ```
+
+**Note:** Firebase credentials are now stored directly in environment variables, no JSON file needed!
 
 ---
 

@@ -3,11 +3,12 @@ uvicorn
 pandas
 numpy
 scikit-learn
+scipy
 python-multipart
 openpyxl
 firebase-admin
-python-jose[cryptography]
-passlib[bcrypt]
-bcrypt==4.0.1
+requests
 python-dotenv
 email-validator
+supabase
+python-magic-bin

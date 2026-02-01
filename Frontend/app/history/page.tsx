@@ -1,11 +1,21 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,74 +39,14 @@ import {
   Trash2,
   Calendar,
   HardDrive,
+  Loader2,
+  AlertCircle,
 } from "lucide-react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
-import { Suspense } from "react"
+import { apiClient, type HistorySummary } from "@/lib/api-client"
+import { useToast } from "@/hooks/use-toast"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
-// Mock history data
-const historyData = [
-  {
-    id: 1,
-    fileName: "sales_data_2024.csv",
-    originalSize: "2.4 MB",
-    processedSize: "2.1 MB",
-    rows: 15420,
-    columns: 12,
-    uploadDate: "2024-01-15T10:30:00",
-    status: "processed",
-  },
-  {
-    id: 2,
-    fileName: "customer_segments.xlsx",
-    originalSize: "1.8 MB",
-    processedSize: "1.5 MB",
-    rows: 8750,
-    columns: 8,
-    uploadDate: "2024-01-14T15:45:00",
-    status: "processed",
-  },
-  {
-    id: 3,
-    fileName: "product_inventory.csv",
-    originalSize: "5.2 MB",
-    processedSize: "4.8 MB",
-    rows: 32100,
-    columns: 15,
-    uploadDate: "2024-01-13T09:15:00",
-    status: "processed",
-  },
-  {
-    id: 4,
-    fileName: "employee_records.xlsx",
-    originalSize: "890 KB",
-    processedSize: "820 KB",
-    rows: 2450,
-    columns: 10,
-    uploadDate: "2024-01-12T14:20:00",
-    status: "processed",
-  },
-  {
-    id: 5,
-    fileName: "marketing_metrics.csv",
-    originalSize: "3.1 MB",
-    processedSize: null,
-    rows: 18900,
-    columns: 20,
-    uploadDate: "2024-01-11T11:00:00",
-    status: "pending",
-  },
-  {
-    id: 6,
-    fileName: "financial_report_q4.xlsx",
-    originalSize: "4.5 MB",
-    processedSize: "4.2 MB",
-    rows: 25600,
-    columns: 18,
-    uploadDate: "2024-01-10T16:30:00",
-    status: "processed",
-  },
-]
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString)
@@ -109,21 +59,130 @@ function formatDate(dateString: string): string {
   }).format(date)
 }
 
-function Loading() {
-  return null
-}
-
 export default function HistoryPage() {
-  const searchParams = useSearchParams()
+  const { toast } = useToast()
+  
   const [searchQuery, setSearchQuery] = useState("")
+  const [historyData, setHistoryData] = useState<HistorySummary[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  
+  const [stats, setStats] = useState({
+    totalFiles: 0,
+    processedFiles: 0,
+    totalRows: 0,
+  })
+
+  // Fetch history data
+  useEffect(() => {
+    fetchHistory()
+    fetchStats()
+  }, [])
+
+  const fetchHistory = async () => {
+    setIsLoading(true)
+    setError(null)
+    
+    try {
+      const response = await apiClient.getHistory(100, 0)
+      setHistoryData(response.data)
+    } catch (error: any) {
+      console.error("Failed to fetch history:", error)
+      setError(error.message || "Failed to load history")
+      toast({
+        title: "Error",
+        description: "Failed to load history data",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const fetchStats = async () => {
+    try {
+      const response = await apiClient.getHistoryStats()
+      setStats({
+        totalFiles: response.data.total_records,
+        processedFiles: response.data.successful_processings,
+        totalRows: 0, // Backend doesn't provide this yet
+      })
+    } catch (error) {
+      console.error("Failed to fetch stats:", error)
+    }
+  }
+
+  const handleDelete = async (historyId: string) => {
+    setDeletingId(historyId)
+    setDeleteDialogOpen(true)
+  }
+
+  const confirmDelete = async () => {
+    if (!deletingId) return
+
+    setIsDeleting(true)
+    
+    try {
+      await apiClient.deleteHistory(deletingId, true)
+      
+      // Remove from local state
+      setHistoryData(prev => prev.filter(item => item.history_id !== deletingId))
+      
+      toast({
+        title: "Success",
+        description: "History record deleted successfully",
+      })
+      
+      // Refresh stats
+      fetchStats()
+    } catch (error: any) {
+      console.error("Failed to delete:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete record",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+      setDeleteDialogOpen(false)
+      setDeletingId(null)
+    }
+  }
+
+  const handleDownload = async (historyId: string) => {
+    try {
+      const response = await apiClient.getHistoryDetail(historyId)
+      
+      if (response.data.processed_file?.download_url) {
+        window.open(response.data.processed_file.download_url, '_blank')
+        toast({
+          title: "Download Started",
+          description: "Your file is being downloaded",
+        })
+      } else {
+        toast({
+          title: "Not Available",
+          description: "Processed file is not available for this record",
+          variant: "destructive",
+        })
+      }
+    } catch (error: any) {
+      console.error("Failed to get download link:", error)
+      toast({
+        title: "Error",
+        description: "Failed to start download",
+        variant: "destructive",
+      })
+    }
+  }
 
   const filteredData = historyData.filter((item) =>
-    item.fileName.toLowerCase().includes(searchQuery.toLowerCase())
+    item.original_file_name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const totalFiles = historyData.length
-  const processedFiles = historyData.filter((f) => f.status === "processed").length
-  const totalRows = historyData.reduce((acc, f) => acc + f.rows, 0)
 
   return (
     <DashboardLayout>
@@ -150,9 +209,9 @@ export default function HistoryPage() {
               <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalFiles}</div>
+              <div className="text-2xl font-bold">{stats.totalFiles}</div>
               <p className="text-xs text-muted-foreground mt-1">
-                {processedFiles} processed
+                {stats.processedFiles} processed
               </p>
             </CardContent>
           </Card>
@@ -164,7 +223,7 @@ export default function HistoryPage() {
               <HardDrive className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalRows.toLocaleString()}</div>
+              <div className="text-2xl font-bold">{stats.totalRows || '-'}</div>
               <p className="text-xs text-muted-foreground mt-1">Across all datasets</p>
             </CardContent>
           </Card>
@@ -176,11 +235,23 @@ export default function HistoryPage() {
               <Calendar className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">Today</div>
-              <p className="text-xs text-muted-foreground mt-1">2 hours ago</p>
+              <div className="text-2xl font-bold">
+                {historyData.length > 0 ? formatDate(historyData[0].created_at).split(',')[0] : '-'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {historyData.length > 0 ? formatDate(historyData[0].created_at).split(',')[1] : 'No uploads yet'}
+              </p>
             </CardContent>
           </Card>
         </div>
+
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
         {/* Search and Table */}
         <Card>
@@ -204,95 +275,131 @@ export default function HistoryPage() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>File Name</TableHead>
-                    <TableHead className="text-right">Rows</TableHead>
-                    <TableHead className="text-right">Columns</TableHead>
-                    <TableHead className="text-right">Size</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredData.length === 0 ? (
+            {isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center space-y-3">
+                  <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Loading history...</p>
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8">
-                        <p className="text-muted-foreground">No files found</p>
-                      </TableCell>
+                      <TableHead>File Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ) : (
-                    filteredData.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary">
-                              <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
-                            </div>
-                            <span className="font-medium">{item.fileName}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {item.rows.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {item.columns}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {item.processedSize || item.originalSize}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {formatDate(item.uploadDate)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={item.status === "processed" ? "default" : "secondary"}
-                          >
-                            {item.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <MoreVertical className="h-4 w-4" />
-                                <span className="sr-only">Open menu</span>
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem asChild>
-                                <Link href="/insights" className="flex items-center">
-                                  <BarChart3 className="mr-2 h-4 w-4" />
-                                  View Insights
-                                </Link>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                disabled={item.status !== "processed"}
-                              >
-                                <Download className="mr-2 h-4 w-4" />
-                                Download
-                              </DropdownMenuItem>
-                              <DropdownMenuItem className="text-destructive">
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredData.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8">
+                          <p className="text-muted-foreground">
+                            {searchQuery ? 'No files found' : 'No upload history yet'}
+                          </p>
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    ) : (
+                      filteredData.map((item) => (
+                        <TableRow key={item.history_id}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary">
+                                <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
+                              </div>
+                              <div>
+                                <span className="font-medium block">{item.original_file_name}</span>
+                                {item.processed_file_name && (
+                                  <span className="text-xs text-muted-foreground">
+                                    → {item.processed_file_name}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="capitalize">
+                            {item.file_type}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {formatDate(item.created_at)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={item.status === "success" ? "default" : item.status === "failed" ? "destructive" : "secondary"}
+                            >
+                              {item.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8">
+                                  <MoreVertical className="h-4 w-4" />
+                                  <span className="sr-only">Open menu</span>
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() => handleDownload(item.history_id)}
+                                  disabled={item.status !== "success"}
+                                >
+                                  <Download className="mr-2 h-4 w-4" />
+                                  Download
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleDelete(item.history_id)}
+                                  className="text-destructive"
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </CardContent>
         </Card>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete this history record and the associated files from storage.
+                This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDelete}
+                disabled={isDeleting}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </DashboardLayout>
   )
 }
-
-export const unstable_settings = { suspense: true }

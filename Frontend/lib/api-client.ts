@@ -5,12 +5,13 @@ export interface User {
   user_id: string
   full_name: string
   email: string
-  created_at: string
+  email_verified: boolean
 }
 
 export interface AuthResponse {
-  access_token: string
-  token_type: string
+  id_token: string
+  refresh_token: string
+  expires_in: number
   user: User
 }
 
@@ -41,6 +42,98 @@ export interface ChangePasswordData {
 
 export interface ApiError {
   detail: string | { loc: string[]; msg: string; type: string }[]
+}
+
+// Dataset & Preprocessing Types
+export interface PreprocessingConfig {
+  target_column?: string
+  missing_threshold?: number
+  outlier_method?: 'cap' | 'remove' | 'none'
+  cardinality_threshold?: number
+  scaling_method?: 'auto' | 'minmax' | 'standard' | 'robust'
+}
+
+export interface PreprocessingReport {
+  original_shape?: [number, number]
+  processed_shape?: [number, number]
+  missing_values_handled?: number
+  outliers_handled?: number
+  columns_dropped?: string[]
+  categorical_encoded?: string[]
+  numerical_scaled?: string[]
+  [key: string]: any
+}
+
+export interface UploadResponse {
+  status: string
+  original_file_url?: string
+  processed_file_url?: string
+  preprocessing_report?: PreprocessingReport
+  message: string
+  error_code?: string
+}
+
+// History Types
+export interface FileInfo {
+  file_name: string
+  bucket_path: string
+  download_url: string
+}
+
+export interface HistorySummary {
+  history_id: string
+  original_file_name: string
+  processed_file_name?: string | null
+  file_type: string
+  status: string
+  created_at: string
+}
+
+export interface HistoryRecord {
+  history_id: string
+  user_id: string
+  file_id: string
+  original_file: FileInfo
+  processed_file?: FileInfo | null
+  file_type: string
+  status: string
+  created_at: string
+  preprocessing_version: string
+  preprocessing_report?: PreprocessingReport | null
+}
+
+export interface HistoryListResponse {
+  status: string
+  total_count: number
+  returned_count: number
+  data: HistorySummary[]
+}
+
+export interface HistoryDetailResponse {
+  status: string
+  data: HistoryRecord
+}
+
+export interface HistoryDeleteResponse {
+  status: string
+  message: string
+  deleted_files?: string[] | null
+}
+
+export interface HistoryStats {
+  status: string
+  data: {
+    total_records: number
+    successful_processings: number
+    failed_processings: number
+    success_rate: number
+    recent_activity: Array<{
+      history_id: string
+      file_name: string
+      status: string
+      created_at: string
+    }>
+  }
 }
 
 // Token management
@@ -135,7 +228,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    setToken(response.access_token)
+    setToken(response.id_token)
     return response
   }
 
@@ -147,7 +240,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    setToken(response.access_token)
+    setToken(response.id_token)
     return response
   }
 
@@ -159,7 +252,7 @@ class ApiClient {
         body: JSON.stringify(data),
       }
     )
-    setToken(response.access_token)
+    setToken(response.id_token)
     return response
   }
 
@@ -204,10 +297,32 @@ class ApiClient {
   }
 
   // Dataset endpoints
-  async uploadDataset(file: File): Promise<any> {
+  async uploadDataset(
+    file: File,
+    config?: PreprocessingConfig
+  ): Promise<UploadResponse> {
     const token = getToken()
     const formData = new FormData()
     formData.append('file', file)
+
+    // Add preprocessing config as form fields
+    if (config) {
+      if (config.target_column) {
+        formData.append('target_column', config.target_column)
+      }
+      if (config.missing_threshold !== undefined) {
+        formData.append('missing_threshold', config.missing_threshold.toString())
+      }
+      if (config.outlier_method) {
+        formData.append('outlier_method', config.outlier_method)
+      }
+      if (config.cardinality_threshold !== undefined) {
+        formData.append('cardinality_threshold', config.cardinality_threshold.toString())
+      }
+      if (config.scaling_method) {
+        formData.append('scaling_method', config.scaling_method)
+      }
+    }
 
     const url = `${this.baseUrl}${API_CONFIG.ENDPOINTS.DATASET.UPLOAD}`
 
@@ -230,6 +345,49 @@ class ApiClient {
     }
 
     return data
+  }
+
+  // History endpoints
+  async getHistory(
+    limit: number = 50,
+    offset: number = 0
+  ): Promise<HistoryListResponse> {
+    const params = new URLSearchParams({
+      limit: limit.toString(),
+      offset: offset.toString(),
+    })
+
+    return this.request<HistoryListResponse>(
+      `${API_CONFIG.ENDPOINTS.HISTORY.LIST}?${params}`,
+      { method: 'GET' }
+    )
+  }
+
+  async getHistoryDetail(historyId: string): Promise<HistoryDetailResponse> {
+    return this.request<HistoryDetailResponse>(
+      API_CONFIG.ENDPOINTS.HISTORY.DETAIL(historyId),
+      { method: 'GET' }
+    )
+  }
+
+  async deleteHistory(
+    historyId: string,
+    deleteFiles: boolean = true
+  ): Promise<HistoryDeleteResponse> {
+    const params = new URLSearchParams({
+      delete_files: deleteFiles.toString(),
+    })
+
+    return this.request<HistoryDeleteResponse>(
+      `${API_CONFIG.ENDPOINTS.HISTORY.DELETE(historyId)}?${params}`,
+      { method: 'DELETE' }
+    )
+  }
+
+  async getHistoryStats(): Promise<HistoryStats> {
+    return this.request<HistoryStats>(API_CONFIG.ENDPOINTS.HISTORY.STATS, {
+      method: 'GET',
+    })
   }
 }
 

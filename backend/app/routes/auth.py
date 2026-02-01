@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, status, Depends
-from datetime import datetime, timedelta
-from google.api_core import exceptions as google_exceptions
-from google.cloud.firestore_v1.base_query import FieldFilter
+from firebase_admin import auth
+from firebase_admin.auth import UserNotFoundError, EmailAlreadyExistsError
+import requests
+import os
+from dotenv import load_dotenv
 from app.models.user import (
     UserSignup, 
     UserLogin, 
@@ -11,86 +13,71 @@ from app.models.user import (
     UserUpdate,
     PasswordChange
 )
-from app.utils.firebase_config import get_db
-from app.utils.jwt_handler import (
-    get_password_hash, 
-    verify_password, 
-    create_access_token,
-    ACCESS_TOKEN_EXPIRE_MINUTES
-)
+from app.utils.firebase_config import get_auth
 from app.utils.auth_middleware import get_current_user
 
+load_dotenv()
+
 router = APIRouter()
+
+# Firebase Web API Key - get from Firebase Console
+FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY")
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def signup(user_data: UserSignup):
     """
-    Create a new user account
+    Create a new user account with Firebase Authentication
     
     - **full_name**: User's full name (2-100 characters)
     - **email**: Valid email address
-    - **password**: Strong password (min 8 chars, 1 uppercase, 1 digit)
+    - **password**: Password (min 6 characters - Firebase requirement)
     """
     try:
-        db = get_db()
+        auth_client = get_auth()
         
-        # Check if user already exists
-        users_ref = db.collection('users')
-        existing_user = users_ref.where(filter=FieldFilter('email', '==', user_data.email)).limit(1).get()
-        
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
-            )
-        
-        # Hash password
-        hashed_password = get_password_hash(user_data.password)
-        
-        # Create user document
-        user_doc = {
-            'full_name': user_data.full_name,
-            'email': user_data.email,
-            'password_hash': hashed_password,
-            'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat()
-        }
-        
-        # Save to Firestore
-        doc_ref = users_ref.document()
-        doc_ref.set(user_doc)
-        user_id = doc_ref.id
-        
-        # Create JWT token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={
-                "sub": user_id,
-                "email": user_data.email,
-                "full_name": user_data.full_name
-            },
-            expires_delta=access_token_expires
+        # Create user in Firebase Authentication
+        user_record = auth_client.create_user(
+            email=user_data.email,
+            password=user_data.password,
+            display_name=user_data.full_name
         )
         
-        # Return token and user info
+        # Sign in the user to get tokens using Firebase REST API
+        signin_url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
+        signin_data = {
+            "email": user_data.email,
+            "password": user_data.password,
+            "returnSecureToken": True
+        }
+        
+        response = requests.post(signin_url, json=signin_data)
+        
+        if response.status_code != 200:
+            # If sign-in fails, delete the created user
+            auth_client.delete_user(user_record.uid)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to generate authentication tokens"
+            )
+        
+        tokens = response.json()
+        
         return TokenResponse(
-            access_token=access_token,
-            token_type="bearer",
+            id_token=tokens['idToken'],
+            refresh_token=tokens['refreshToken'],
+            expires_in=int(tokens['expiresIn']),
             user=UserResponse(
-                user_id=user_id,
+                user_id=user_record.uid,
                 full_name=user_data.full_name,
                 email=user_data.email,
-                created_at=user_doc['created_at']
+                email_verified=False
             )
         )
     
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-    except google_exceptions.NotFound:
+    except EmailAlreadyExistsError:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database not configured. Please contact administrator to set up Firestore database."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
         )
     except Exception as e:
         raise HTTPException(
@@ -101,65 +88,56 @@ async def signup(user_data: UserSignup):
 @router.post("/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     """
-    Login with email and password
+    Login with email and password using Firebase Authentication
     
     - **email**: Registered email address
     - **password**: User password
     """
     try:
-        db = get_db()
+        # Sign in using Firebase REST API
+        signin_url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
+        signin_data = {
+            "email": credentials.email,
+            "password": credentials.password,
+            "returnSecureToken": True
+        }
         
-        # Find user by email
-        users_ref = db.collection('users')
-        user_docs = users_ref.where(filter=FieldFilter('email', '==', credentials.email)).limit(1).get()
+        response = requests.post(signin_url, json=signin_data)
         
-        if not user_docs:
+        if response.status_code != 200:
+            error_data = response.json()
+            error_message = error_data.get('error', {}).get('message', 'Login failed')
+            
+            if 'INVALID_PASSWORD' in error_message or 'EMAIL_NOT_FOUND' in error_message:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Incorrect email or password"
+                )
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message
             )
         
-        user_doc = user_docs[0]
-        user_data = user_doc.to_dict()
-        user_id = user_doc.id
+        tokens = response.json()
         
-        # Verify password
-        if not verify_password(credentials.password, user_data['password_hash']):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password"
-            )
-        
-        # Create JWT token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={
-                "sub": user_id,
-                "email": user_data['email'],
-                "full_name": user_data['full_name']
-            },
-            expires_delta=access_token_expires
-        )
+        # Get user info from Firebase Auth
+        auth_client = get_auth()
+        user_record = auth_client.get_user(tokens['localId'])
         
         return TokenResponse(
-            access_token=access_token,
-            token_type="bearer",
+            id_token=tokens['idToken'],
+            refresh_token=tokens['refreshToken'],
+            expires_in=int(tokens['expiresIn']),
             user=UserResponse(
-                user_id=user_id,
-                full_name=user_data['full_name'],
-                email=user_data['email'],
-                created_at=user_data['created_at']
+                user_id=user_record.uid,
+                full_name=user_record.display_name or "",
+                email=user_record.email,
+                email_verified=user_record.email_verified
             )
         )
     
     except HTTPException:
-        # Re-raise HTTP exceptions as-is
         raise
-    except google_exceptions.NotFound:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database not configured. Please contact administrator to set up Firestore database."
-        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -171,26 +149,28 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """
     Get current authenticated user information
     
-    Requires: Bearer token in Authorization header
+    Requires: Bearer token (Firebase ID token) in Authorization header
     """
-    db = get_db()
-    
-    user_doc = db.collection('users').document(current_user['user_id']).get()
-    
-    if not user_doc.exists:
+    try:
+        auth_client = get_auth()
+        user_record = auth_client.get_user(current_user['user_id'])
+        
+        return UserResponse(
+            user_id=user_record.uid,
+            full_name=user_record.display_name or "",
+            email=user_record.email,
+            email_verified=user_record.email_verified
+        )
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    user_data = user_doc.to_dict()
-    
-    return UserResponse(
-        user_id=user_doc.id,
-        full_name=user_data['full_name'],
-        email=user_data['email'],
-        created_at=user_data['created_at']
-    )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get user info: {str(e)}"
+        )
 
 @router.put("/me", response_model=UserResponse)
 async def update_user_info(
@@ -200,48 +180,38 @@ async def update_user_info(
     """
     Update current user information
     
-    Requires: Bearer token in Authorization header
+    Requires: Bearer token (Firebase ID token) in Authorization header
     """
-    db = get_db()
-    user_ref = db.collection('users').document(current_user['user_id'])
-    user_doc = user_ref.get()
-    
-    if not user_doc.exists:
+    try:
+        auth_client = get_auth()
+        
+        # Prepare update data
+        update_data = {}
+        if user_update.full_name is not None:
+            update_data['display_name'] = user_update.full_name
+        
+        # Update user in Firebase Auth
+        auth_client.update_user(current_user['user_id'], **update_data)
+        
+        # Get updated user data
+        user_record = auth_client.get_user(current_user['user_id'])
+        
+        return UserResponse(
+            user_id=user_record.uid,
+            full_name=user_record.display_name or "",
+            email=user_record.email,
+            email_verified=user_record.email_verified
+        )
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    # Prepare update data
-    update_data = {}
-    if user_update.full_name is not None:
-        update_data['full_name'] = user_update.full_name
-    if user_update.email is not None:
-        # Check if new email is already taken
-        users_ref = db.collection('users')
-        existing = users_ref.where(filter=FieldFilter('email', '==', user_update.email)).limit(1).get()
-        if existing and existing[0].id != current_user['user_id']:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already in use"
-            )
-        update_data['email'] = user_update.email
-    
-    update_data['updated_at'] = datetime.utcnow().isoformat()
-    
-    # Update user document
-    user_ref.update(update_data)
-    
-    # Get updated user data
-    updated_doc = user_ref.get()
-    updated_data = updated_doc.to_dict()
-    
-    return UserResponse(
-        user_id=updated_doc.id,
-        full_name=updated_data['full_name'],
-        email=updated_data['email'],
-        created_at=updated_data['created_at']
-    )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Update failed: {str(e)}"
+        )
 
 @router.post("/change-password", response_model=MessageResponse)
 async def change_password(
@@ -251,45 +221,45 @@ async def change_password(
     """
     Change user password
     
-    Requires: Bearer token in Authorization header
+    Requires: Bearer token (Firebase ID token) in Authorization header
     """
-    db = get_db()
-    user_ref = db.collection('users').document(current_user['user_id'])
-    user_doc = user_ref.get()
-    
-    if not user_doc.exists:
+    try:
+        auth_client = get_auth()
+        
+        # Update password in Firebase Auth
+        auth_client.update_user(
+            current_user['user_id'],
+            password=password_data.new_password
+        )
+        
+        return MessageResponse(message="Password changed successfully")
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    user_data = user_doc.to_dict()
-    
-    # Verify old password
-    if not verify_password(password_data.old_password, user_data['password_hash']):
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect current password"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Password change failed: {str(e)}"
         )
-    
-    # Hash new password
-    new_hashed_password = get_password_hash(password_data.new_password)
-    
-    # Update password
-    user_ref.update({
-        'password_hash': new_hashed_password,
-        'updated_at': datetime.utcnow().isoformat()
-    })
-    
-    return MessageResponse(message="Password changed successfully")
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(current_user: dict = Depends(get_current_user)):
     """
-    Logout current user (client should discard the token)
+    Logout current user
     
-    Requires: Bearer token in Authorization header
+    Requires: Bearer token (Firebase ID token) in Authorization header
+    Note: Client should discard the token. For enhanced security, 
+    you can revoke refresh tokens on the server side.
     """
-    # In a stateless JWT system, logout is handled client-side by discarding the token
-    # If you need server-side token invalidation, implement a token blacklist
-    return MessageResponse(message="Logged out successfully")
+    try:
+        auth_client = get_auth()
+        # Revoke all refresh tokens for the user
+        auth_client.revoke_refresh_tokens(current_user['user_id'])
+        
+        return MessageResponse(message="Logged out successfully. All refresh tokens have been revoked.")
+    except Exception as e:
+        # Even if revocation fails, inform client to discard token
+        return MessageResponse(message="Logged out successfully")
+

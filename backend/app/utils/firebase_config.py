@@ -1,62 +1,59 @@
 import firebase_admin
-from firebase_admin import credentials, firestore
-from google.api_core import exceptions as google_exceptions
+from firebase_admin import credentials, auth
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-db = None
-
 def initialize_firebase():
     """Initialize Firebase Admin SDK"""
-    global db
-    
     try:
         # Check if already initialized
         firebase_admin.get_app()
     except ValueError:
-        # Initialize Firebase
-        cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
+        # Initialize Firebase from environment variables
+        required_env_vars = [
+            "FIREBASE_TYPE",
+            "FIREBASE_PROJECT_ID",
+            "FIREBASE_PRIVATE_KEY_ID",
+            "FIREBASE_PRIVATE_KEY",
+            "FIREBASE_CLIENT_EMAIL",
+            "FIREBASE_CLIENT_ID",
+        ]
         
-        if not cred_path:
+        # Check if all required environment variables are set
+        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+        if missing_vars:
             raise ValueError(
-                "FIREBASE_CREDENTIALS_PATH environment variable is not set. "
-                "Please configure it in your .env file."
-            )
-        
-        if not os.path.exists(cred_path):
-            raise FileNotFoundError(
-                f"Firebase credentials file not found at: {cred_path}. "
-                "Please ensure the firebase-credentials.json file exists."
+                f"Missing required Firebase environment variables: {', '.join(missing_vars)}. "
+                "Please configure them in your .env file."
             )
         
         try:
-            cred = credentials.Certificate(cred_path)
+            # Build credentials dictionary from environment variables
+            cred_dict = {
+                "type": os.getenv("FIREBASE_TYPE"),
+                "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+                "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+                "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace('\\n', '\n'),
+                "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+                "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+                "auth_uri": os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+                "token_uri": os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+                "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
+                "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL"),
+                "universe_domain": os.getenv("FIREBASE_UNIVERSE_DOMAIN", "googleapis.com")
+            }
+            
+            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
-            db = firestore.client()
-            
-            # Test database connection by checking if we can access it
-            # This will fail early if the database doesn't exist
-            db.collection('_health_check')
-            
-        except google_exceptions.NotFound as e:
-            raise RuntimeError(
-                "Firebase Firestore database does not exist. "
-                "Please create a Firestore database in the Firebase Console: "
-                "https://console.firebase.google.com -> Firestore Database -> Create database"
-            ) from e
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize Firebase: {str(e)}. "
-                "Please check your firebase-credentials.json file."
+                "Please check your Firebase environment variables."
             ) from e
-    
-    return db
 
-def get_db():
-    """Get Firestore database instance"""
-    global db
-    if db is None:
-        db = initialize_firebase()
-    return db
+def get_auth():
+    """Get Firebase Auth instance"""
+    initialize_firebase()
+    return auth

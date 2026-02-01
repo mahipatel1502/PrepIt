@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { FileUpload } from "@/components/dashboard/file-upload"
 import { DataTablePreview } from "@/components/dashboard/data-table-preview"
@@ -8,33 +9,58 @@ import { StatsCards } from "@/components/dashboard/stats-cards"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { Loader2, Download, Wand2, CheckCircle } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Loader2, Download, Wand2, CheckCircle, AlertCircle } from "lucide-react"
+import { apiClient, type PreprocessingConfig, type UploadResponse } from "@/lib/api-client"
+import { useToast } from "@/hooks/use-toast"
 
-// Mock data parser - in production, this would parse actual CSV/Excel files
-function parseFile(file: File): Promise<{
+// Parse CSV/Excel to preview data
+function parseFileForPreview(file: File): Promise<{
   data: Record<string, unknown>[]
   columns: string[]
 }> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      // Mock parsed data
-      const mockData = [
-        { id: 1, name: "John Doe", age: 28, email: "john@example.com", salary: 75000, department: "Engineering" },
-        { id: 2, name: "Jane Smith", age: 34, email: "jane@example.com", salary: 82000, department: "Marketing" },
-        { id: 3, name: "Bob Wilson", age: null, email: "bob@example.com", salary: 65000, department: "Sales" },
-        { id: 4, name: "Alice Brown", age: 29, email: null, salary: 78000, department: "Engineering" },
-        { id: 5, name: "Charlie Davis", age: 45, email: "charlie@example.com", salary: 95000, department: "Management" },
-        { id: 6, name: "Eva Martinez", age: 31, email: "eva@example.com", salary: null, department: "Marketing" },
-        { id: 7, name: "Frank Lee", age: 38, email: "frank@example.com", salary: 72000, department: "Sales" },
-        { id: 8, name: "Grace Kim", age: 26, email: "grace@example.com", salary: 68000, department: "Engineering" },
-        { id: 9, name: "Henry Chen", age: null, email: "henry@example.com", salary: 85000, department: "Engineering" },
-        { id: 10, name: "Ivy Wong", age: 33, email: "ivy@example.com", salary: 79000, department: "Marketing" },
-        { id: 11, name: "Jack Brown", age: 41, email: null, salary: 91000, department: "Management" },
-        { id: 12, name: "Karen White", age: 29, email: "karen@example.com", salary: 74000, department: "Sales" },
-      ]
-      const columns = ["id", "name", "age", "email", "salary", "department"]
-      resolve({ data: mockData, columns })
-    }, 1500)
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string
+        const lines = text.split('\n').filter(line => line.trim())
+        
+        if (lines.length === 0) {
+          reject(new Error('File is empty'))
+          return
+        }
+        
+        // Parse CSV header
+        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
+        
+        // Parse rows (limit to first 20 for preview)
+        const data: Record<string, unknown>[] = []
+        const previewLines = lines.slice(1, Math.min(21, lines.length))
+        
+        previewLines.forEach((line, idx) => {
+          const values = line.split(',').map(v => v.trim().replace(/"/g, ''))
+          const row: Record<string, unknown> = {}
+          
+          headers.forEach((header, i) => {
+            const value = values[i] || ''
+            // Try to parse as number
+            const numValue = parseFloat(value)
+            row[header] = !isNaN(numValue) && value !== '' ? numValue : value
+          })
+          
+          data.push(row)
+        })
+        
+        resolve({ data, columns: headers })
+      } catch (error) {
+        reject(error)
+      }
+    }
+    
+    reader.onerror = () => reject(new Error('Failed to read file'))
+    reader.readAsText(file)
   })
 }
 
@@ -66,61 +92,125 @@ function calculateStats(data: Record<string, unknown>[], columns: string[]) {
   }
 }
 
+
 export default function UploadPage() {
+  const router = useRouter()
+  const { toast } = useToast()
+  
   const [file, setFile] = useState<File | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isProcessed, setIsProcessed] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  
   const [parsedData, setParsedData] = useState<{
     data: Record<string, unknown>[]
     columns: string[]
   } | null>(null)
+  
+  const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null)
 
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile)
     setIsLoading(true)
     setIsProcessed(false)
+    setError(null)
     setParsedData(null)
+    setUploadResult(null)
 
     try {
-      const result = await parseFile(selectedFile)
+      // Parse file for preview
+      const result = await parseFileForPreview(selectedFile)
       setParsedData(result)
-    } catch (error) {
-      console.error("[v0] Error parsing file:", error)
+    } catch (error: any) {
+      console.error("Error parsing file:", error)
+      setError(error.message || "Failed to parse file")
+      toast({
+        title: "Error",
+        description: "Failed to preview file. You can still try to process it.",
+        variant: "destructive",
+      })
     } finally {
       setIsLoading(false)
     }
   }
 
   const handlePreprocess = async () => {
+    if (!file) return
+
     setIsProcessing(true)
     setProgress(0)
+    setError(null)
 
-    // Simulate preprocessing steps
-    const steps = [20, 40, 60, 80, 100]
-    for (const step of steps) {
-      await new Promise((resolve) => setTimeout(resolve, 600))
-      setProgress(step)
+    try {
+      // Simulate progress
+      const progressInterval = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 90) {
+            clearInterval(progressInterval)
+            return 90
+          }
+          return prev + 10
+        })
+      }, 500)
+
+      // Preprocessing configuration (can be made customizable)
+      const config: PreprocessingConfig = {
+        missing_threshold: 50.0,
+        outlier_method: 'cap',
+        cardinality_threshold: 10,
+        scaling_method: 'auto',
+      }
+
+      const response = await apiClient.uploadDataset(file, config)
+      
+      clearInterval(progressInterval)
+      setProgress(100)
+      
+      setUploadResult(response)
+      
+      if (response.status === 'success') {
+        setIsProcessed(true)
+        toast({
+          title: "Success!",
+          description: "Dataset processed successfully",
+        })
+      } else if (response.status === 'error') {
+        setError(response.message || "Processing failed")
+        toast({
+          title: "Processing Error",
+          description: response.message,
+          variant: "destructive",
+        })
+      }
+      
+    } catch (error: any) {
+      console.error("Upload error:", error)
+      setError(error.message || "Failed to process file")
+      toast({
+        title: "Error",
+        description: error.message || "Failed to process file",
+        variant: "destructive",
+      })
+    } finally {
+      setIsProcessing(false)
     }
-
-    setIsProcessing(false)
-    setIsProcessed(true)
   }
 
   const handleDownload = () => {
-    // In production, this would download the processed file
-    const blob = new Blob([JSON.stringify(parsedData?.data, null, 2)], {
-      type: "application/json",
-    })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `processed_${file?.name || "data"}.json`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    if (uploadResult?.processed_file_url) {
+      // Open download link in new tab
+      window.open(uploadResult.processed_file_url, '_blank')
+      toast({
+        title: "Download Started",
+        description: "Your processed file is being downloaded",
+      })
+    }
+  }
+
+  const handleViewHistory = () => {
+    router.push('/history')
   }
 
   return (
@@ -144,6 +234,14 @@ export default function UploadPage() {
             <FileUpload onFileSelect={handleFileSelect} />
           </CardContent>
         </Card>
+
+        {error && !isProcessing && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
         {isLoading && (
           <Card>
@@ -181,16 +279,54 @@ export default function UploadPage() {
                       <span className="font-medium">{progress}%</span>
                     </div>
                     <Progress value={progress} />
+                    <p className="text-xs text-muted-foreground">
+                      Cleaning data, handling missing values, encoding features...
+                    </p>
                   </div>
                 )}
 
-                {isProcessed && (
-                  <div className="flex items-center gap-2 p-3 bg-success/10 text-success rounded-lg border border-success/20">
-                    <CheckCircle className="h-5 w-5" />
-                    <span className="font-medium">
-                      Preprocessing complete! Your data is ready for download.
-                    </span>
-                  </div>
+                {isProcessed && uploadResult?.status === 'success' && (
+                  <Alert>
+                    <CheckCircle className="h-4 w-4" />
+                    <AlertTitle>Success!</AlertTitle>
+                    <AlertDescription>
+                      {uploadResult.message || 'Preprocessing complete! Your data is ready for download.'}
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {uploadResult?.preprocessing_report && (
+                  <Card className="bg-muted/50">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">Preprocessing Summary</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm">
+                      {uploadResult.preprocessing_report.original_shape && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Original Shape:</span>
+                          <span className="font-mono">
+                            {uploadResult.preprocessing_report.original_shape.join(' × ')}
+                          </span>
+                        </div>
+                      )}
+                      {uploadResult.preprocessing_report.processed_shape && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Processed Shape:</span>
+                          <span className="font-mono">
+                            {uploadResult.preprocessing_report.processed_shape.join(' × ')}
+                          </span>
+                        </div>
+                      )}
+                      {uploadResult.preprocessing_report.missing_values_handled !== undefined && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Missing Values Handled:</span>
+                          <span className="font-medium">
+                            {uploadResult.preprocessing_report.missing_values_handled}
+                          </span>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
                 )}
 
                 <div className="flex flex-col sm:flex-row gap-3">
@@ -220,13 +356,23 @@ export default function UploadPage() {
                   <Button
                     variant="outline"
                     onClick={handleDownload}
-                    disabled={!isProcessed}
+                    disabled={!isProcessed || !uploadResult?.processed_file_url}
                     className="flex-1 bg-transparent"
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Download Cleaned File
                   </Button>
                 </div>
+
+                {isProcessed && (
+                  <Button
+                    variant="secondary"
+                    onClick={handleViewHistory}
+                    className="w-full"
+                  >
+                    View in History
+                  </Button>
+                )}
               </CardContent>
             </Card>
           </>
