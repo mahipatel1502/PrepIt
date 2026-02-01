@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PrepIt Auth Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        input {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+        .info {
+            color: blue;
+        }
+        pre {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>PrepIt Authentication Test</h1>
+    
+    <div class="test-section">
+        <h3>Test 1: Backend Health Check</h3>
+        <button onclick="testHealth()">Check Backend Health</button>
+        <div id="health-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Test 2: Login with INVALID Credentials</h3>
+        <p>This should FAIL with 401 error</p>
+        <input type="email" id="invalid-email" value="invalid@test.com" placeholder="Email">
+        <input type="password" id="invalid-password" value="wrongpassword" placeholder="Password">
+        <button onclick="testInvalidLogin()">Test Invalid Login</button>
+        <div id="invalid-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Test 3: Create New User (Signup)</h3>
+        <input type="text" id="signup-name" value="Test User" placeholder="Full Name">
+        <input type="email" id="signup-email" value="testuser@example.com" placeholder="Email">
+        <input type="password" id="signup-password" value="Test1234" placeholder="Password (min 8 chars)">
+        <button onclick="testSignup()">Test Signup</button>
+        <div id="signup-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Test 4: Login with VALID Credentials</h3>
+        <p>Use credentials from successful signup above</p>
+        <input type="email" id="valid-email" value="testuser@example.com" placeholder="Email">
+        <input type="password" id="valid-password" value="Test1234" placeholder="Password">
+        <button onclick="testValidLogin()">Test Valid Login</button>
+        <div id="valid-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Test 5: Check Stored Token</h3>
+        <button onclick="checkToken()">Check LocalStorage Token</button>
+        <button onclick="clearToken()">Clear Token</button>
+        <div id="token-result"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+
+        function displayResult(elementId, message, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<p class="${type}">${message}</p>`;
+        }
+
+        function displayJSON(elementId, data, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<p class="${type}">Response:</p><pre>${JSON.stringify(data, null, 2)}</pre>`;
+        }
+
+        async function testHealth() {
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                if (response.ok) {
+                    displayJSON('health-result', data, 'success');
+                } else {
+                    displayJSON('health-result', data, 'error');
+                }
+            } catch (error) {
+                displayResult('health-result', `❌ Backend not running: ${error.message}`, 'error');
+            }
+        }
+
+        async function testInvalidLogin() {
+            const email = document.getElementById('invalid-email').value;
+            const password = document.getElementById('invalid-password').value;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResult('invalid-result', `❌ SECURITY ISSUE: Invalid credentials were accepted!`, 'error');
+                    displayJSON('invalid-result', data, 'error');
+                } else {
+                    displayResult('invalid-result', `✅ CORRECT: Login rejected with status ${response.status}`, 'success');
+                    displayJSON('invalid-result', data, 'success');
+                }
+            } catch (error) {
+                displayResult('invalid-result', `Network error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testSignup() {
+            const full_name = document.getElementById('signup-name').value;
+            const email = document.getElementById('signup-email').value;
+            const password = document.getElementById('signup-password').value;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/auth/signup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ full_name, email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResult('signup-result', `✅ Signup successful!`, 'success');
+                    displayJSON('signup-result', data, 'success');
+                    // Store token
+                    localStorage.setItem('prepit_auth_token', data.access_token);
+                    // Update valid login fields
+                    document.getElementById('valid-email').value = email;
+                    document.getElementById('valid-password').value = password;
+                } else {
+                    displayResult('signup-result', `Signup failed with status ${response.status}`, 'error');
+                    displayJSON('signup-result', data, 'error');
+                }
+            } catch (error) {
+                displayResult('signup-result', `Network error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testValidLogin() {
+            const email = document.getElementById('valid-email').value;
+            const password = document.getElementById('valid-password').value;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResult('valid-result', `✅ Login successful with valid credentials!`, 'success');
+                    displayJSON('valid-result', data, 'success');
+                    localStorage.setItem('prepit_auth_token', data.access_token);
+                } else {
+                    displayResult('valid-result', `❌ Login failed with status ${response.status}`, 'error');
+                    displayJSON('valid-result', data, 'error');
+                }
+            } catch (error) {
+                displayResult('valid-result', `Network error: ${error.message}`, 'error');
+            }
+        }
+
+        function checkToken() {
+            const token = localStorage.getItem('prepit_auth_token');
+            if (token) {
+                displayResult('token-result', `Token exists in localStorage`, 'success');
+                document.getElementById('token-result').innerHTML += `<pre>${token}</pre>`;
+            } else {
+                displayResult('token-result', `No token found in localStorage`, 'info');
+            }
+        }
+
+        function clearToken() {
+            localStorage.removeItem('prepit_auth_token');
+            displayResult('token-result', `✅ Token cleared from localStorage`, 'success');
+        }
+    </script>
+</body>
+</html>

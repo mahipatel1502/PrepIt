@@ -5,3 +5,9 @@ numpy
 scikit-learn
 python-multipart
 openpyxl
+firebase-admin
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt==4.0.1
+python-dotenv
+email-validator

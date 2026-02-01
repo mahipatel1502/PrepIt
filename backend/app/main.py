@@ -1,23 +1,34 @@
-from fastapi import FastAPI, UploadFile, File
-import pandas as pd
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routes import auth, dataset
+from app.utils.firebase_config import initialize_firebase
 
-app = FastAPI()
+# Initialize Firebase
+initialize_firebase()
 
-@app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-    try:
-        # Read Excel file
-        df = pd.read_excel(file.file)
+app = FastAPI(
+    title="PrepIt API",
+    description="Data preprocessing and analytics platform",
+    version="1.0.0"
+)
 
-        # Example: print first rows
-        print(df.head())
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure this in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        return {
-            "message": "File uploaded successfully",
-            "rows": len(df),
-            "columns": list(df.columns)
-        }
+# Include routers
+app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(dataset.router, prefix="/api/dataset", tags=["Dataset"])
 
-    except Exception as e:
-        print("ERROR:", e)
-        return {"error": str(e)}
+@app.get("/")
+async def root():
+    return {"message": "PrepIt API is running", "version": "1.0.0"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}

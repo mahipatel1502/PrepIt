@@ -1,6 +1,8 @@
 "use client"
 
-import { createContext, useContext, useState, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { apiClient, getToken, removeToken } from "@/lib/api-client"
+import type { User as ApiUser } from "@/lib/api-client"
 
 interface User {
   id: string
@@ -8,50 +10,105 @@ interface User {
   name: string
   avatar?: string
   provider: "email" | "google"
+  createdAt?: string
 }
 
 interface AuthContextType {
   user: User | null
   isAuthenticated: boolean
+  isLoading: boolean
   login: (email: string, password: string) => Promise<void>
   loginWithGoogle: () => Promise<void>
   signup: (email: string, password: string, name: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Mock user for demo purposes
-const mockUser: User = {
-  id: "1",
-  email: "user@prepit.ai",
-  name: "John Doe",
-  provider: "email",
+// Transform API user to local user format
+function transformUser(apiUser: ApiUser): User {
+  return {
+    id: apiUser.user_id,
+    email: apiUser.email,
+    name: apiUser.full_name,
+    provider: "email",
+    createdAt: apiUser.created_at,
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
-  const login = async (email: string, _password: string) => {
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    setUser({ ...mockUser, email })
+  // Check for existing session on mount
+  useEffect(() => {
+    const initAuth = async () => {
+      const token = getToken()
+      if (token) {
+        try {
+          const userData = await apiClient.getCurrentUser()
+          setUser(transformUser(userData))
+        } catch (error) {
+          console.error("Failed to fetch user:", error)
+          removeToken()
+        }
+      }
+      setIsLoading(false)
+    }
+
+    initAuth()
+  }, [])
+
+  const login = async (email: string, password: string) => {
+    try {
+      const response = await apiClient.login({ email, password })
+      setUser(transformUser(response.user))
+    } catch (error: any) {
+      console.error("Login error:", error)
+      throw new Error(error.message || "Invalid credentials. Please try again.")
+    }
   }
 
   const loginWithGoogle = async () => {
-    // Simulate Google OAuth
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    setUser({ ...mockUser, provider: "google", name: "Google User" })
+    // TODO: Implement Google OAuth when backend supports it
+    throw new Error("Google login is not yet implemented. Please use email/password.")
   }
 
-  const signup = async (email: string, _password: string, name: string) => {
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    setUser({ ...mockUser, email, name })
+  const signup = async (email: string, password: string, name: string) => {
+    try {
+      const response = await apiClient.signup({
+        full_name: name,
+        email,
+        password,
+      })
+      setUser(transformUser(response.user))
+    } catch (error: any) {
+      console.error("Signup error:", error)
+      throw new Error(error.message || "Signup failed. Please try again.")
+    }
   }
 
-  const logout = () => {
-    setUser(null)
+  const logout = async () => {
+    try {
+      await apiClient.logout()
+    } catch (error) {
+      console.error("Logout error:", error)
+    } finally {
+      setUser(null)
+      removeToken()
+    }
+  }
+
+  const refreshUser = async () => {
+    try {
+      const userData = await apiClient.getCurrentUser()
+      setUser(transformUser(userData))
+    } catch (error) {
+      console.error("Failed to refresh user:", error)
+      setUser(null)
+      removeToken()
+    }
   }
 
   return (
@@ -59,10 +116,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         isAuthenticated: !!user,
+        isLoading,
         login,
         loginWithGoogle,
         signup,
         logout,
+        refreshUser,
       }}
     >
       {children}

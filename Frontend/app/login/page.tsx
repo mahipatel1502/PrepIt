@@ -43,20 +43,21 @@ export default function LoginPage() {
     try {
       await login(email, password)
       router.push("/dashboard")
-    } catch {
-      setError("Invalid credentials. Please try again.")
+    } catch (err: any) {
+      setError(err.message || "Invalid credentials. Please try again.")
     } finally {
       setIsLoading(false)
     }
   }
 
   const handleGoogleLogin = async () => {
+    setError("")
     setIsLoading(true)
     try {
       await loginWithGoogle()
       router.push("/dashboard")
-    } catch {
-      setError("Google login failed. Please try again.")
+    } catch (err: any) {
+      setError(err.message || "Google login failed. Please try again.")
     } finally {
       setIsLoading(false)
     }

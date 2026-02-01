@@ -1,15 +1,23 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 import pandas as pd
 
 from app.services.preprocessing import preprocess_data
 from app.services.analytics import analyze_data
 from app.utils.file_handler import validate_file
+from app.utils.auth_middleware import get_current_user
 
 router = APIRouter()
 
 @router.post("/upload")
-async def upload_dataset(file: UploadFile = File(...)):
-
+async def upload_dataset(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Upload and process a dataset (CSV or Excel)
+    
+    Requires: Bearer token in Authorization header
+    """
     validate_file(file.filename)
 
     if file.filename.endswith(".csv"):
@@ -22,6 +30,7 @@ async def upload_dataset(file: UploadFile = File(...)):
 
     return {
         "message": "Dataset processed successfully",
+        "user_id": current_user['user_id'],
         "preprocessing_report": report,
         "analytics": analytics
     }

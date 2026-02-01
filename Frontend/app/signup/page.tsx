@@ -62,20 +62,21 @@ export default function SignupPage() {
     try {
       await signup(email, password, name)
       router.push("/dashboard")
-    } catch {
-      setError("Signup failed. Please try again.")
+    } catch (err: any) {
+      setError(err.message || "Signup failed. Please try again.")
     } finally {
       setIsLoading(false)
     }
   }
 
   const handleGoogleSignup = async () => {
+    setError("")
     setIsLoading(true)
     try {
       await loginWithGoogle()
       router.push("/dashboard")
-    } catch {
-      setError("Google signup failed. Please try again.")
+    } catch (err: any) {
+      setError(err.message || "Google signup failed. Please try again.")
     } finally {
       setIsLoading(false)
     }
