@@ -1,8 +1,9 @@
 "use client"
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
-import { apiClient, getToken, removeToken } from "@/lib/api-client"
+import { apiClient, getToken, removeToken, setToken } from "@/lib/api-client"
 import type { User as ApiUser } from "@/lib/api-client"
+import { signInWithGoogle, checkRedirectResult, onAuthChange, firebaseSignOut } from "@/lib/firebase"
 
 interface User {
   id: string
@@ -41,23 +42,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  // Check for existing session on mount
+  // Check for existing session and Firebase redirect result on mount
   useEffect(() => {
     const initAuth = async () => {
+      console.log("🔍 Checking auth state...")
+      
+      // First check for redirect result from Google sign-in
+      try {
+        const redirectResult = await checkRedirectResult()
+        console.log("🔍 Redirect result:", redirectResult ? "User found" : "No redirect")
+        
+        if (redirectResult?.user) {
+          // User signed in with Google via redirect
+          const firebaseUser = redirectResult.user
+          const idToken = await firebaseUser.getIdToken()
+          
+          console.log("✅ Google sign-in successful:", firebaseUser.email)
+          
+          // Store the Firebase token as our auth token
+          setToken(idToken)
+          
+          // Set user from Firebase data
+          const newUser = {
+            id: firebaseUser.uid,
+            email: firebaseUser.email || "",
+            name: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User",
+            avatar: firebaseUser.photoURL || undefined,
+            provider: "google" as const,
+            createdAt: firebaseUser.metadata.creationTime,
+          }
+          
+          setUser(newUser)
+          setIsLoading(false)
+          console.log("✅ User state set, isLoading set to false")
+          return
+        }
+      } catch (error) {
+        console.error("❌ Error checking redirect result:", error)
+      }
+
+      // Then check for existing backend session
       const token = getToken()
       if (token) {
+        console.log("🔍 Found existing token, fetching user...")
         try {
           const userData = await apiClient.getCurrentUser()
           setUser(transformUser(userData))
+          console.log("✅ User loaded from backend:", userData.email)
         } catch (error) {
-          console.error("Failed to fetch user:", error)
+          console.error("❌ Failed to fetch user:", error)
           removeToken()
         }
       }
       setIsLoading(false)
+      console.log("✅ Auth initialization complete")
     }
 
     initAuth()
+
+    // Listen to Firebase auth state changes
+    const unsubscribe = onAuthChange(async (firebaseUser) => {
+      console.log("🔍 Auth state changed:", firebaseUser ? firebaseUser.email : "No user")
+      
+      if (firebaseUser) {
+        // User is signed in with Firebase
+        const idToken = await firebaseUser.getIdToken()
+        setToken(idToken)
+        
+        const newUser = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || "",
+          name: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User",
+          avatar: firebaseUser.photoURL || undefined,
+          provider: "google" as const,
+          createdAt: firebaseUser.metadata.creationTime,
+        }
+        
+        setUser(newUser)
+        console.log("✅ User state updated from auth change:", newUser.email)
+      }
+    })
+
+    return () => unsubscribe()
   }, [])
 
   const login = async (email: string, password: string) => {
@@ -71,8 +137,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const loginWithGoogle = async () => {
-    // TODO: Implement Google OAuth when backend supports it
-    throw new Error("Google login is not yet implemented. Please use email/password.")
+    try {
+      console.log("🔍 Starting Google login...")
+      
+      // Sign in with Firebase Google provider (popup first, redirect fallback)
+      const result = await signInWithGoogle()
+      
+      console.log("✅ Google sign-in completed:", result.user.email)
+      
+      // Get the Firebase ID token
+      const idToken = await result.user.getIdToken()
+      
+      // Store the Firebase token as our auth token
+      setToken(idToken)
+      
+      // Set user from Firebase data
+      const newUser = {
+        id: result.user.uid,
+        email: result.user.email || "",
+        name: result.user.displayName || result.user.email?.split("@")[0] || "User",
+        avatar: result.user.photoURL || undefined,
+        provider: "google" as const,
+        createdAt: result.user.metadata.creationTime,
+      }
+      
+      setUser(newUser)
+      console.log("✅ User state set in context:", newUser.email)
+      
+    } catch (error: any) {
+      console.error("❌ Google login error:", error)
+      
+      // If it's the redirecting message, don't show error
+      if (error.message?.includes("Redirecting")) {
+        console.log("🔄 Redirecting to Google, auth will complete after redirect...")
+        return
+      }
+      
+      throw new Error(error.message || "Google sign-in failed. Please try again.")
+    }
   }
 
   const signup = async (email: string, password: string, name: string) => {
@@ -91,7 +193,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      await apiClient.logout()
+      // Sign out from Firebase if logged in with Google
+      await firebaseSignOut()
+      
+      // Also try to logout from backend if using email/password
+      if (user?.provider === "email") {
+        await apiClient.logout()
+      }
     } catch (error) {
       console.error("Logout error:", error)
     } finally {

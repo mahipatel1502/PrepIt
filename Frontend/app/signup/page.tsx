@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/context/auth-context"
@@ -17,7 +17,7 @@ import { Sun, Moon, Eye, EyeOff, Loader2 } from "lucide-react"
 
 export default function SignupPage() {
   const router = useRouter()
-  const { signup, loginWithGoogle } = useAuth()
+  const { signup, loginWithGoogle, isAuthenticated, isLoading: authLoading } = useAuth()
   const { theme, toggleTheme } = useTheme()
   
   const [name, setName] = useState("")
@@ -28,6 +28,13 @@ export default function SignupPage() {
   const [agreeTerms, setAgreeTerms] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      router.push("/dashboard")
+    }
+  }, [isAuthenticated, authLoading, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -72,14 +79,32 @@ export default function SignupPage() {
   const handleGoogleSignup = async () => {
     setError("")
     setIsLoading(true)
+    console.log("🔍 Signup page: Google button clicked")
+    
     try {
       await loginWithGoogle()
+      console.log("✅ Signup page: Google signup successful, redirecting to dashboard")
       router.push("/dashboard")
     } catch (err: any) {
-      setError(err.message || "Google signup failed. Please try again.")
-    } finally {
-      setIsLoading(false)
+      // Don't show error if we're redirecting
+      if (!err.message?.includes("Redirecting")) {
+        setError(err.message || "Google signup failed. Please try again.")
+        setIsLoading(false)
+      }
+      // If redirecting, keep loading state
     }
+  }
+
+  // Show loading while checking auth state
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
+          <p className="mt-4 text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    )
   }
 
   return (

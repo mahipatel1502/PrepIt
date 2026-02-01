@@ -25,6 +25,10 @@ export interface LoginData {
   password: string
 }
 
+export interface GoogleLoginData {
+  id_token: string
+}
+
 export interface UpdateUserData {
   full_name?: string
   email?: string
@@ -68,12 +72,16 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const token = getToken()
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...options.headers,
     }
 
-    if (token && !options.headers?.['Authorization']) {
+    // Merge with provided headers
+    if (options.headers) {
+      Object.assign(headers, options.headers)
+    }
+
+    if (token && !headers['Authorization']) {
       headers['Authorization'] = `Bearer ${token}`
     }
 
@@ -134,6 +142,18 @@ class ApiClient {
   async login(data: LoginData): Promise<AuthResponse> {
     const response = await this.request<AuthResponse>(
       API_CONFIG.ENDPOINTS.AUTH.LOGIN,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }
+    )
+    setToken(response.access_token)
+    return response
+  }
+
+  async loginWithGoogle(data: GoogleLoginData): Promise<AuthResponse> {
+    const response = await this.request<AuthResponse>(
+      API_CONFIG.ENDPOINTS.AUTH.GOOGLE_LOGIN,
       {
         method: 'POST',
         body: JSON.stringify(data),

@@ -5,6 +5,7 @@ export const API_CONFIG = {
     AUTH: {
       SIGNUP: '/api/auth/signup',
       LOGIN: '/api/auth/login',
+      GOOGLE_LOGIN: '/api/auth/google',
       LOGOUT: '/api/auth/logout',
       ME: '/api/auth/me',
       UPDATE: '/api/auth/me',
