@@ -1,7 +1,7 @@
 // API Configuration
 // Validate API URL in production
 const getApiUrl = () => {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://prepit-copy.onrender.com'
   
   // Log warning in production if using localhost
   if (process.env.NODE_ENV === 'production' && apiUrl.includes('localhost')) {
