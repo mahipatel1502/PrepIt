@@ -11,5 +11,5 @@ requests
 python-dotenv
 email-validator
 supabase
-python-magic-bin
 gunicorn
+python-magic
