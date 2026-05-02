@@ -43,6 +43,7 @@ import {
   AlertCircle,
 } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { apiClient, type HistorySummary } from "@/lib/api-client"
 import { useToast } from "@/hooks/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -61,6 +62,7 @@ function formatDate(dateString: string): string {
 
 export default function HistoryPage() {
   const { toast } = useToast()
+  const router = useRouter()
   
   const [searchQuery, setSearchQuery] = useState("")
   const [historyData, setHistoryData] = useState<HistorySummary[]>([])
@@ -155,9 +157,12 @@ export default function HistoryPage() {
   const handleDownload = async (historyId: string) => {
     try {
       const response = await apiClient.getHistoryDetail(historyId)
+      const downloadUrl =
+        response.data.processed_file?.download_url ||
+        response.data.processed_file?.file_url
       
-      if (response.data.processed_file?.download_url) {
-        window.open(response.data.processed_file.download_url, '_blank')
+      if (downloadUrl) {
+        window.open(downloadUrl, '_blank')
         toast({
           title: "Download Started",
           description: "Your file is being downloaded",
@@ -349,6 +354,13 @@ export default function HistoryPage() {
                                 >
                                   <Download className="mr-2 h-4 w-4" />
                                   Download
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => router.push(`/insights/${item.history_id}`)}
+                                  disabled={item.status !== "success"}
+                                >
+                                  <BarChart3 className="mr-2 h-4 w-4" />
+                                  Insights
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onClick={() => handleDelete(item.history_id)}

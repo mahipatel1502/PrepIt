@@ -22,6 +22,18 @@ class UniversalPreprocessor:
     """
     Universal data preprocessor that handles all types of datasets intelligently
     """
+
+    PROFILE_MAX_COLUMNS = 50
+    PROFILE_MAX_NUMERIC_COLUMNS = 16
+    PROFILE_MAX_CORRELATION_COLUMNS = 10
+    PROFILE_MAX_CORRELATION_PAIRS = 20
+    PROFILE_MAX_CORRELATION_ROWS = 12000
+    PROFILE_MAX_CATEGORICAL_COLUMNS = 8
+    PROFILE_MAX_CATEGORY_TOP_VALUES = 6
+    PROFILE_HISTOGRAM_COLUMNS = 4
+    PROFILE_HISTOGRAM_BINS = 8
+    PROFILE_MAX_HISTOGRAM_ROWS = 15000
+    PROFILE_MAX_OUTLIER_COLUMNS = 12
     
     def __init__(
         self,
@@ -44,6 +56,299 @@ class UniversalPreprocessor:
         self.cardinality_threshold = cardinality_threshold
         self.scaling_method = scaling_method
         self.metadata = {}
+
+    def _normalize_profile_value(self, value: Any) -> Any:
+        """Convert numpy/pandas values to JSON-safe native Python values."""
+        if isinstance(value, (np.integer,)):
+            return int(value)
+        if isinstance(value, (np.floating, float)):
+            if np.isnan(value) or np.isinf(value):
+                return None
+            return float(round(value, 6))
+        if isinstance(value, (pd.Timestamp, datetime)):
+            return value.isoformat()
+        if pd.isna(value):
+            return None
+        return value
+
+    def _get_column_kind(self, column: str, col_types: Dict[str, List[str]]) -> str:
+        """Map internal column groups to frontend-friendly labels."""
+        if column in col_types.get('numerical', []) or column in col_types.get('count', []):
+            return "numeric"
+        if column in col_types.get('categorical', []):
+            return "categorical"
+        if column in col_types.get('datetime', []):
+            return "datetime"
+        if column in col_types.get('boolean', []):
+            return "boolean"
+        if column in col_types.get('id', []):
+            return "id"
+        return "other"
+
+    def _build_insights_profile(
+        self,
+        df: pd.DataFrame,
+        col_types: Dict[str, List[str]]
+    ) -> Dict[str, Any]:
+        """
+        Build compact but rich profiling data for the insights page.
+        This runs once during preprocessing and is persisted for fast retrieval.
+        """
+        try:
+            total_rows, total_columns = df.shape
+            total_cells = total_rows * total_columns
+            missing_cells = int(df.isna().sum().sum())
+            completeness_pct = round(
+                (1 - (missing_cells / total_cells)) * 100 if total_cells > 0 else 0,
+                2
+            )
+            duplicate_rows = int(df.duplicated().sum())
+
+            all_columns = df.columns.tolist()
+            column_sample = all_columns[:self.PROFILE_MAX_COLUMNS]
+
+            # Column details (for distribution and missing tabs)
+            column_details = []
+            for col in column_sample:
+                series = df[col]
+                missing_count = int(series.isna().sum())
+                unique_count = int(series.nunique(dropna=True))
+
+                sample_values = []
+                non_null_unique = series.dropna().drop_duplicates().head(1).tolist()
+                for value in non_null_unique:
+                    sample_values.append(str(self._normalize_profile_value(value))[:40])
+
+                column_details.append({
+                    "column": col,
+                    "type": self._get_column_kind(col, col_types),
+                    "missing_count": missing_count,
+                    "missing_pct": round((missing_count / total_rows) * 100, 2) if total_rows > 0 else 0,
+                    "unique_count": unique_count,
+                    "sample_values": sample_values
+                })
+
+            missing_values_by_column = []
+            missing_series = df.isna().sum().sort_values(ascending=False)
+            for col, count in missing_series.items():
+                missing_count = int(count)
+                if missing_count == 0:
+                    continue
+                missing_values_by_column.append({
+                    "column": col,
+                    "missing_count": missing_count,
+                    "missing_pct": round((missing_count / total_rows) * 100, 2) if total_rows > 0 else 0
+                })
+
+            # Numeric statistics and histograms
+            numeric_candidates = []
+            for col in col_types.get('numerical', []) + col_types.get('count', []):
+                if col in df.columns and col not in numeric_candidates:
+                    numeric_candidates.append(col)
+
+            numerical_statistics = []
+            for index, col in enumerate(numeric_candidates[:self.PROFILE_MAX_NUMERIC_COLUMNS]):
+                numeric_series = pd.to_numeric(df[col], errors='coerce').dropna()
+                if numeric_series.empty:
+                    continue
+
+                col_stat = {
+                    "column": col,
+                    "mean": self._normalize_profile_value(numeric_series.mean()),
+                    "median": self._normalize_profile_value(numeric_series.median()),
+                    "std": self._normalize_profile_value(numeric_series.std()),
+                    "min": self._normalize_profile_value(numeric_series.min()),
+                    "max": self._normalize_profile_value(numeric_series.max()),
+                    "q1": self._normalize_profile_value(numeric_series.quantile(0.25)),
+                    "q3": self._normalize_profile_value(numeric_series.quantile(0.75)),
+                    "skewness": self._normalize_profile_value(numeric_series.skew()),
+                    "count": int(numeric_series.shape[0])
+                }
+
+                # Add histogram for first few columns only to control payload size.
+                if index < self.PROFILE_HISTOGRAM_COLUMNS:
+                    histogram_series = numeric_series
+                    if len(histogram_series) > self.PROFILE_MAX_HISTOGRAM_ROWS:
+                        histogram_series = histogram_series.sample(
+                            self.PROFILE_MAX_HISTOGRAM_ROWS,
+                            random_state=42
+                        )
+
+                    bin_count = min(
+                        self.PROFILE_HISTOGRAM_BINS,
+                        max(5, int(np.sqrt(min(len(histogram_series), 10000))))
+                    )
+                    hist_counts, bin_edges = np.histogram(histogram_series.values, bins=bin_count)
+                    histogram = []
+                    for i, count in enumerate(hist_counts):
+                        histogram.append({
+                            "start": self._normalize_profile_value(bin_edges[i]),
+                            "end": self._normalize_profile_value(bin_edges[i + 1]),
+                            "count": int(count)
+                        })
+                    col_stat["histogram"] = histogram
+
+                numerical_statistics.append(col_stat)
+
+            # Correlation pairs (top absolute correlations)
+            correlation_pairs = []
+            correlation_matrix = {"columns": [], "values": []}
+            correlation_columns = numeric_candidates[:self.PROFILE_MAX_CORRELATION_COLUMNS]
+            if len(correlation_columns) >= 2:
+                corr_df = df[correlation_columns].apply(pd.to_numeric, errors='coerce')
+                corr_df = corr_df.dropna(how='all')
+
+                if len(corr_df) > self.PROFILE_MAX_CORRELATION_ROWS:
+                    corr_df = corr_df.sample(self.PROFILE_MAX_CORRELATION_ROWS, random_state=42)
+
+                if len(corr_df) >= 2:
+                    corr_matrix = corr_df.corr(method='pearson')
+                    pairs = []
+                    cols = corr_matrix.columns.tolist()
+
+                    # Full square matrix for heatmap rendering on frontend
+                    matrix_values = []
+                    for row_col in cols:
+                        row_values = []
+                        for col_name in cols:
+                            row_values.append(self._normalize_profile_value(corr_matrix.loc[row_col, col_name]))
+                        matrix_values.append(row_values)
+
+                    correlation_matrix = {
+                        "columns": cols,
+                        "values": matrix_values
+                    }
+
+                    for i in range(len(cols)):
+                        for j in range(i + 1, len(cols)):
+                            corr_value = corr_matrix.iloc[i, j]
+                            if pd.isna(corr_value):
+                                continue
+                            pairs.append({
+                                "left": cols[i],
+                                "right": cols[j],
+                                "pair": f"{cols[i]}-{cols[j]}",
+                                "correlation": self._normalize_profile_value(corr_value),
+                                "abs_correlation": self._normalize_profile_value(abs(corr_value))
+                            })
+
+                    pairs.sort(key=lambda x: x["abs_correlation"] or 0, reverse=True)
+                    correlation_pairs = pairs[:self.PROFILE_MAX_CORRELATION_PAIRS]
+
+            # Categorical distributions
+            categorical_candidates = []
+            for col in col_types.get('categorical', []) + col_types.get('boolean', []):
+                if col in df.columns and col not in categorical_candidates:
+                    categorical_candidates.append(col)
+
+            categorical_distributions = []
+            for col in categorical_candidates[:self.PROFILE_MAX_CATEGORICAL_COLUMNS]:
+                series = df[col]
+                filled = series.where(series.notna(), "__NULL__")
+                value_counts = filled.astype(str).value_counts().head(self.PROFILE_MAX_CATEGORY_TOP_VALUES)
+                top_values = []
+                for value, count in value_counts.items():
+                    label = "NULL" if value == "__NULL__" else value
+                    pct = round((int(count) / total_rows) * 100, 2) if total_rows > 0 else 0
+                    top_values.append({
+                        "value": str(label)[:50],
+                        "count": int(count),
+                        "pct": pct
+                    })
+
+                categorical_distributions.append({
+                    "column": col,
+                    "unique_count": int(series.nunique(dropna=True)),
+                    "top_values": top_values
+                })
+
+            # Outlier summary using IQR on numeric columns
+            outlier_summary = []
+            for col in numeric_candidates[:self.PROFILE_MAX_OUTLIER_COLUMNS]:
+                numeric_series = pd.to_numeric(df[col], errors='coerce').dropna()
+                if numeric_series.empty:
+                    continue
+
+                q1 = numeric_series.quantile(0.25)
+                q3 = numeric_series.quantile(0.75)
+                iqr = q3 - q1
+                if iqr == 0 or pd.isna(iqr):
+                    outlier_count = 0
+                else:
+                    lower = q1 - 1.5 * iqr
+                    upper = q3 + 1.5 * iqr
+                    outlier_count = int(((numeric_series < lower) | (numeric_series > upper)).sum())
+
+                outlier_summary.append({
+                    "column": col,
+                    "outlier_count": outlier_count,
+                    "outlier_pct": round((outlier_count / len(numeric_series)) * 100, 2) if len(numeric_series) > 0 else 0
+                })
+
+            # High-level highlights
+            highlights = []
+            if missing_values_by_column:
+                top_missing = missing_values_by_column[0]
+                highlights.append(
+                    f"Highest missing values: {top_missing['column']} ({top_missing['missing_pct']}%)"
+                )
+            if correlation_pairs:
+                strongest = correlation_pairs[0]
+                highlights.append(
+                    f"Strongest correlation: {strongest['left']} vs {strongest['right']} ({strongest['correlation']})"
+                )
+            if duplicate_rows > 0:
+                highlights.append(f"Duplicate rows detected: {duplicate_rows}")
+            else:
+                highlights.append("No duplicate rows detected in source data")
+
+            data_type_distribution = [
+                {"name": "Numeric", "value": int(len(col_types.get('numerical', [])) + len(col_types.get('count', [])))},
+                {"name": "Categorical", "value": int(len(col_types.get('categorical', [])))},
+                {"name": "Datetime", "value": int(len(col_types.get('datetime', [])))},
+                {"name": "Boolean", "value": int(len(col_types.get('boolean', [])))},
+                {"name": "ID", "value": int(len(col_types.get('id', [])))}
+            ]
+
+            return {
+                "version": "v1",
+                "generated_at": datetime.now().isoformat(),
+                "dataset_overview": {
+                    "rows": int(total_rows),
+                    "columns": int(total_columns),
+                    "total_cells": int(total_cells),
+                    "missing_cells": int(missing_cells),
+                    "completeness_pct": completeness_pct,
+                    "duplicate_rows": duplicate_rows
+                },
+                "data_type_distribution": data_type_distribution,
+                "column_details": column_details,
+                "missing_values_by_column": missing_values_by_column[:self.PROFILE_MAX_COLUMNS],
+                "numerical_statistics": numerical_statistics,
+                "correlation_pairs": correlation_pairs,
+                "correlation_matrix": correlation_matrix,
+                "categorical_distributions": categorical_distributions,
+                "outlier_summary": outlier_summary,
+                "highlights": highlights,
+                "limits": {
+                    "column_details_max": self.PROFILE_MAX_COLUMNS,
+                    "numeric_stats_max": self.PROFILE_MAX_NUMERIC_COLUMNS,
+                    "correlation_pairs_max": self.PROFILE_MAX_CORRELATION_PAIRS
+                },
+                "truncated": {
+                    "column_details": total_columns > self.PROFILE_MAX_COLUMNS,
+                    "numerical_statistics": len(numeric_candidates) > self.PROFILE_MAX_NUMERIC_COLUMNS,
+                    "categorical_distributions": len(categorical_candidates) > self.PROFILE_MAX_CATEGORICAL_COLUMNS
+                }
+            }
+
+        except Exception as e:
+            logger.warning(f"Failed to build insights profile: {str(e)}")
+            return {
+                "version": "v1",
+                "generated_at": datetime.now().isoformat(),
+                "error": f"insights_profile_generation_failed: {str(e)}"
+            }
     
     def load_data(self, file_path: str) -> pd.DataFrame:
         """Load data from CSV or XLSX file"""
@@ -140,7 +445,7 @@ class UniversalPreprocessor:
             if df[col].dtype == 'object':
                 if any(kw in col.lower() for kw in ['date', 'time', 'timestamp', 'day', 'dt']):
                     try:
-                        temp = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True)
+                        temp = pd.to_datetime(df[col], errors='coerce')
                         if temp.notna().sum() > len(df) * 0.5:
                             col_types['datetime'].append(col)
                             continue
@@ -183,7 +488,7 @@ class UniversalPreprocessor:
         
         # Convert datetime columns
         for col in col_types['datetime']:
-            df[col] = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True)
+            df[col] = pd.to_datetime(df[col], errors='coerce')
         
         # Convert numeric string columns
         for col in col_types['count'] + col_types['numerical']:
@@ -554,6 +859,9 @@ class UniversalPreprocessor:
         
         # Step 3: Convert data types
         df = self._convert_data_types(df, col_types)
+
+        # Step 3a: Build rich profile from source dataset before transformations.
+        insights_profile = self._build_insights_profile(df, col_types)
         
         # Step 4: Sort time-series data
         if col_types['datetime'] and col_types['categorical']:
@@ -597,6 +905,7 @@ class UniversalPreprocessor:
         
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
+        final_columns_list = df.columns.tolist()
         
         # Generate report
         report = {
@@ -609,8 +918,11 @@ class UniversalPreprocessor:
             'non_informative_columns_removed': col_types['non_informative'],
             'processing_time_seconds': round(processing_time, 2),
             'column_types': {k: len(v) for k, v in col_types.items()},
-            'final_columns': df.columns.tolist(),
+            'final_columns_count': len(final_columns_list),
+            'final_columns': final_columns_list[:200],
+            'final_columns_truncated': len(final_columns_list) > 200,
             'dropped_columns': self.metadata.get('dropped_columns', []),
+            'insights_profile': insights_profile,
             'timestamp': datetime.now().isoformat()
         }
         

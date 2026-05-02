@@ -57,3 +57,9 @@ class HistoryDeleteResponse(BaseModel):
     status: str
     message: str
     deleted_files: Optional[Dict[str, bool]] = None
+
+
+class HistoryInsightsResponse(BaseModel):
+    """Response model for history insights endpoint"""
+    status: str
+    data: Dict[str, Any]

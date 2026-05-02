@@ -68,6 +68,7 @@ export interface UploadResponse {
   status: string
   original_file_url?: string
   processed_file_url?: string
+  history_id?: string
   preprocessing_report?: PreprocessingReport
   message: string
   error_code?: string
@@ -77,7 +78,8 @@ export interface UploadResponse {
 export interface FileInfo {
   file_name: string
   bucket_path: string
-  download_url: string
+  file_url?: string
+  download_url?: string
 }
 
 export interface HistorySummary {
@@ -134,6 +136,109 @@ export interface HistoryStats {
       created_at: string
     }>
   }
+}
+
+export interface HistoryInsightsData {
+  history_id: string
+  original_file_name: string
+  processed_file_name?: string | null
+  created_at: string
+  status: string
+  profile_version?: string
+  profile_generated_at?: string
+  profile_storage_mode?: "full" | "compact" | "minimal" | string
+  summary: {
+    original_rows: number
+    processed_rows: number
+    original_columns: number
+    processed_columns: number
+    rows_removed: number
+    columns_added: number
+    columns_dropped: number
+    duplicates_removed: number
+    features_engineered: number
+    processing_time_seconds: number
+    data_quality_score: number
+  }
+  column_type_distribution: Array<{
+    name: string
+    value: number
+  }>
+  dataset_overview?: {
+    rows: number
+    columns: number
+    total_cells: number
+    missing_cells: number
+    completeness_pct: number
+    duplicate_rows: number
+  }
+  column_details?: Array<{
+    column: string
+    type: string
+    missing_count: number
+    missing_pct: number
+    unique_count: number
+    sample_values?: string[]
+  }>
+  missing_values_by_column?: Array<{
+    column: string
+    missing_count: number
+    missing_pct: number
+  }>
+  numerical_statistics?: Array<{
+    column: string
+    mean: number | null
+    median: number | null
+    std: number | null
+    min: number | null
+    max: number | null
+    q1: number | null
+    q3: number | null
+    skewness: number | null
+    count: number
+    histogram?: Array<{
+      start: number | null
+      end: number | null
+      count: number
+    }>
+  }>
+  correlation_pairs?: Array<{
+    left: string
+    right: string
+    pair: string
+    correlation: number | null
+    abs_correlation: number | null
+  }>
+  correlation_matrix?: {
+    columns: string[]
+    values: Array<Array<number | null>>
+  }
+  categorical_distributions?: Array<{
+    column: string
+    unique_count: number
+    top_values: Array<{
+      value: string
+      count: number
+      pct: number
+    }>
+  }>
+  outlier_summary?: Array<{
+    column: string
+    outlier_count: number
+    outlier_pct: number
+  }>
+  highlights?: string[]
+  limits?: Record<string, number>
+  truncated?: Record<string, boolean>
+  dropped_columns: string[]
+  removed_non_informative_columns: string[]
+  final_columns_sample: string[]
+  report_timestamp?: string
+}
+
+export interface HistoryInsightsResponse {
+  status: string
+  data: HistoryInsightsData
 }
 
 // Token management
@@ -201,9 +306,12 @@ class ApiClient {
       if (error.status) {
         throw error
       }
+      const connectionHint = this.baseUrl.includes("localhost")
+        ? `Cannot connect to API at ${this.baseUrl}. Make sure backend server is running.`
+        : `Cannot connect to API at ${this.baseUrl}.`
       throw {
         status: 0,
-        message: 'Network error. Please check your connection.',
+        message: connectionHint,
         data: null,
       }
     }
@@ -350,15 +458,34 @@ class ApiClient {
   // History endpoints
   async getHistory(
     limit: number = 50,
-    offset: number = 0
+    offset: number = 0,
+    includeTotal: boolean = true
   ): Promise<HistoryListResponse> {
     const params = new URLSearchParams({
       limit: limit.toString(),
       offset: offset.toString(),
+      include_total: includeTotal.toString(),
     })
 
     return this.request<HistoryListResponse>(
       `${API_CONFIG.ENDPOINTS.HISTORY.LIST}?${params}`,
+      { method: 'GET' }
+    )
+  }
+
+  async getCompletedFiles(
+    limit: number = 50,
+    offset: number = 0,
+    includeTotal: boolean = false
+  ): Promise<HistoryListResponse> {
+    const params = new URLSearchParams({
+      limit: limit.toString(),
+      offset: offset.toString(),
+      include_total: includeTotal.toString(),
+    })
+
+    return this.request<HistoryListResponse>(
+      `${API_CONFIG.ENDPOINTS.HISTORY.COMPLETED_FILES}?${params}`,
       { method: 'GET' }
     )
   }
@@ -388,6 +515,13 @@ class ApiClient {
     return this.request<HistoryStats>(API_CONFIG.ENDPOINTS.HISTORY.STATS, {
       method: 'GET',
     })
+  }
+
+  async getHistoryInsights(historyId: string): Promise<HistoryInsightsResponse> {
+    return this.request<HistoryInsightsResponse>(
+      API_CONFIG.ENDPOINTS.HISTORY.INSIGHTS(historyId),
+      { method: 'GET' }
+    )
   }
 }
 

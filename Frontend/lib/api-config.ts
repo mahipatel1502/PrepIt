@@ -28,8 +28,10 @@ export const API_CONFIG = {
     },
     HISTORY: {
       LIST: '/api/history',
+      COMPLETED_FILES: '/api/history/completed/files',
       DETAIL: (historyId: string) => `/api/history/${historyId}`,
       DELETE: (historyId: string) => `/api/history/${historyId}`,
+      INSIGHTS: (historyId: string) => `/api/history/insights/${historyId}`,
       STATS: '/api/history/stats/summary',
     },
   },

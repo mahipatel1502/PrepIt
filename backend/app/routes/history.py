@@ -3,7 +3,6 @@ History Routes
 Handles user preprocessing history tracking and retrieval
 """
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional
 import logging
 
 from app.services.firestore_service import get_firestore_service
@@ -13,6 +12,7 @@ from app.models.history import (
     HistoryListResponse,
     HistoryDetailResponse,
     HistoryDeleteResponse,
+    HistoryInsightsResponse,
     HistorySummary,
     HistoryRecordResponse,
     FileInfo
@@ -22,10 +22,29 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _build_history_summary(record: dict) -> HistorySummary:
+    """Build response summary from a history record dict."""
+    return HistorySummary(
+        history_id=record.get("history_id"),
+        original_file_name=record.get("original_file", {}).get("file_name", "Unknown"),
+        processed_file_name=(
+            record.get("processed_file", {}).get("file_name")
+            if record.get("processed_file") else None
+        ),
+        file_type=record.get("file_type", "unknown"),
+        status=record.get("status", "unknown"),
+        created_at=record.get("created_at", "")
+    )
+
+
 @router.get("", response_model=HistoryListResponse)
 async def get_user_history(
     limit: int = Query(50, ge=1, le=100, description="Number of records to return"),
     offset: int = Query(0, ge=0, description="Number of records to skip"),
+    include_total: bool = Query(
+        True,
+        description="Include total_count in response (set false to reduce read cost)"
+    ),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -54,27 +73,13 @@ async def get_user_history(
         history_records = firestore_service.get_user_history(
             user_id=user_id,
             limit=limit,
-            offset=offset
+            offset=offset,
+            summary_only=True
         )
         
-        # Get total count
-        total_count = firestore_service.count_user_history(user_id)
+        total_count = firestore_service.count_user_history(user_id) if include_total else 0
         
-        # Convert to summary format
-        summaries = []
-        for record in history_records:
-            summary = HistorySummary(
-                history_id=record.get("history_id"),
-                original_file_name=record.get("original_file", {}).get("file_name", "Unknown"),
-                processed_file_name=(
-                    record.get("processed_file", {}).get("file_name")
-                    if record.get("processed_file") else None
-                ),
-                file_type=record.get("file_type", "unknown"),
-                status=record.get("status", "unknown"),
-                created_at=record.get("created_at", "")
-            )
-            summaries.append(summary)
+        summaries = [_build_history_summary(record) for record in history_records]
         
         return HistoryListResponse(
             status="success",
@@ -88,6 +93,95 @@ async def get_user_history(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch history: {str(e)}"
+        )
+
+
+@router.get("/completed/files", response_model=HistoryListResponse)
+async def get_completed_files(
+    limit: int = Query(50, ge=1, le=200, description="Number of completed records to return"),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
+    include_total: bool = Query(
+        False,
+        description="Include total completed count (set false for lower latency)"
+    ),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get completed files list for insights/file picker flows.
+    Optimized to return summary fields only.
+    """
+    try:
+        user_id = current_user['user_id']
+        logger.info(f"Fetching completed files for user: {user_id} (limit={limit}, offset={offset})")
+
+        firestore_service = get_firestore_service()
+        records = firestore_service.get_user_completed_history(
+            user_id=user_id,
+            limit=limit,
+            offset=offset
+        )
+        summaries = [_build_history_summary(record) for record in records]
+        total_count = firestore_service.count_user_history(user_id, status="success") if include_total else 0
+
+        return HistoryListResponse(
+            status="success",
+            total_count=total_count,
+            returned_count=len(summaries),
+            data=summaries
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to fetch completed files: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch completed files: {str(e)}"
+        )
+
+
+@router.get("/insights/{history_id}", response_model=HistoryInsightsResponse)
+async def get_history_insights(
+    history_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get lightweight insights for a single processed file.
+    Insights are derived from stored preprocessing report (no reprocessing).
+    """
+    try:
+        user_id = current_user['user_id']
+        logger.info(f"Fetching insights for history: {history_id} user: {user_id}")
+
+        firestore_service = get_firestore_service()
+        payload = firestore_service.build_insights_payload(
+            history_id=history_id,
+            user_id=user_id
+        )
+
+        if not payload:
+            raise HTTPException(
+                status_code=404,
+                detail="History record not found or access denied"
+            )
+
+        if payload.get("status") != "success":
+            raise HTTPException(
+                status_code=400,
+                detail="Insights are available only for successfully processed files"
+            )
+
+        return HistoryInsightsResponse(
+            status="success",
+            data=payload
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Failed to fetch history insights: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch history insights: {str(e)}"
         )
 
 
@@ -276,21 +370,22 @@ async def get_history_stats(
         
         firestore_service = get_firestore_service()
         
-        # Get all history for stats
-        all_history = firestore_service.get_user_history(
+        # Fetch only recent activity fields (no need to scan full docs)
+        recent_history = firestore_service.get_user_history(
             user_id=user_id,
-            limit=1000,  # Get a large set for stats
-            offset=0
+            limit=5,
+            offset=0,
+            summary_only=True
         )
         
-        # Calculate statistics
-        total_count = len(all_history)
-        success_count = sum(1 for r in all_history if r.get("status") == "success")
+        # Calculate statistics with count aggregations
+        total_count = firestore_service.count_user_history(user_id)
+        success_count = firestore_service.count_user_history(user_id, status="success")
         failed_count = total_count - success_count
         
         # Get recent activity (last 5)
         recent_activity = []
-        for record in all_history[:5]:
+        for record in recent_history:
             recent_activity.append({
                 "history_id": record.get("history_id"),
                 "file_name": record.get("original_file", {}).get("file_name"),

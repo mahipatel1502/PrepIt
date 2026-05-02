@@ -163,6 +163,7 @@ async def upload_and_process_dataset(
             }
         
         # Step 5: Save successful history record to Firestore
+        history_id = None
         try:
             processed_filename = safe_filename.replace(".xlsx", ".csv").replace(".xls", ".csv")
             original_bucket_path = f"{user_id}/{file_id}_original_{safe_filename}"
@@ -183,8 +184,14 @@ async def upload_and_process_dataset(
             )
             logger.info(f"Created history record: {history_id}")
         except Exception as e:
-            logger.error(f"Failed to save history record: {e}")
-            # Continue anyway - files are uploaded successfully
+            logger.error(f"Failed to save history record for successful upload: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "File processed but failed to save history record. "
+                    "Please retry upload or contact support."
+                )
+            )
         
         # Step 6: Return success response
         logger.info("Pipeline completed successfully")
@@ -194,6 +201,7 @@ async def upload_and_process_dataset(
             "original_file_url": original_file_url,
             "processed_file_url": processed_file_url,
             "preprocessing_report": preprocessing_result['report'],
+            "history_id": history_id,
             "message": "File processed successfully"
         }
     
