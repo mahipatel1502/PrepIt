@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { apiClient } from "@/lib/api-client"
+import { apiClient, type UploadResponse } from "@/lib/api-client"
 import { useAuth } from "@/context/auth-context"
 
 interface UploadProgress {
@@ -10,33 +10,13 @@ interface UploadProgress {
   percentage: number
 }
 
-interface PreprocessingReport {
-  missing_values: number
-  duplicate_rows: number
-  cleaned_rows: number
-  // Add more fields as per your backend response
-}
-
-interface Analytics {
-  row_count: number
-  column_count: number
-  // Add more fields as per your backend response
-}
-
-interface UploadResult {
-  message: string
-  user_id: string
-  preprocessing_report: PreprocessingReport
-  analytics: Analytics
-}
-
 export function useFileUpload() {
   const { isAuthenticated } = useAuth()
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const uploadFile = async (file: File): Promise<UploadResult> => {
+  const uploadFile = async (file: File): Promise<UploadResponse> => {
     if (!isAuthenticated) {
       throw new Error("You must be logged in to upload files")
     }

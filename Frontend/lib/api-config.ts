@@ -34,6 +34,12 @@ export const API_CONFIG = {
       INSIGHTS: (historyId: string) => `/api/history/insights/${historyId}`,
       STATS: '/api/history/stats/summary',
     },
+    AUTOML: {
+      FILES: '/api/automl/files',
+      SCHEMA: (historyId: string) => `/api/automl/schema/${historyId}`,
+      TRAIN: '/api/automl/train',
+      DOWNLOAD: (runId: string) => `/api/automl/download/${runId}`,
+    },
   },
   TOKEN_KEY: 'prepit_auth_token',
 } as const

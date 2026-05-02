@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Upload,
   BarChart3,
+  BrainCircuit,
   History,
   Settings,
   X,
@@ -17,6 +18,7 @@ const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Upload", href: "/upload", icon: Upload },
   { name: "Insights", href: "/insights", icon: BarChart3 },
+  { name: "AutoML", href: "/automl", icon: BrainCircuit },
   { name: "History", href: "/history", icon: History },
   { name: "Settings", href: "/settings", icon: Settings },
 ]

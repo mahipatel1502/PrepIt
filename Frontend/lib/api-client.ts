@@ -241,6 +241,92 @@ export interface HistoryInsightsResponse {
   data: HistoryInsightsData
 }
 
+// AutoML Types
+export interface AutoMLFileSummary {
+  history_id: string
+  original_file_name: string
+  processed_file_name?: string | null
+  file_type: string
+  status: string
+  created_at: string
+}
+
+export interface AutoMLFilesResponse {
+  status: string
+  returned_count: number
+  data: AutoMLFileSummary[]
+}
+
+export interface AutoMLColumnProfile {
+  name: string
+  dtype: string
+  missing_count: number
+  missing_pct: number
+  unique_count: number
+  is_numeric: boolean
+}
+
+export interface AutoMLSchemaData {
+  history_id: string
+  original_file_name: string
+  processed_file_name?: string | null
+  rows: number
+  columns: number
+  target_candidates: string[]
+  column_profiles: AutoMLColumnProfile[]
+}
+
+export interface AutoMLSchemaResponse {
+  status: string
+  data: AutoMLSchemaData
+}
+
+export interface AutoMLTrainRequest {
+  history_id: string
+  target_column: string
+  test_size?: number
+  random_state?: number
+}
+
+export interface AutoMLLeaderboardEntry {
+  rank?: number | null
+  model_key: string
+  model_name: string
+  fit_time_seconds?: number | null
+  score?: number | null
+  metrics: Record<string, number | null>
+  status: string
+  error?: string | null
+  is_best: boolean
+}
+
+export interface AutoMLTrainData {
+  run_id: string
+  history_id: string
+  original_file_name: string
+  processed_file_name?: string | null
+  target_column: string
+  problem_type: "classification" | "regression" | string
+  train_rows: number
+  test_rows: number
+  feature_count: number
+  test_size: number
+  leaderboard: AutoMLLeaderboardEntry[]
+  best_model: {
+    model_key: string
+    model_name: string
+    score: number
+    metrics: Record<string, number | null>
+  }
+  download_endpoint: string
+  trained_at: string
+}
+
+export interface AutoMLTrainResponse {
+  status: string
+  data: AutoMLTrainData
+}
+
 // Token management
 export const getToken = (): string | null => {
   if (typeof window === 'undefined') return null
@@ -522,6 +608,73 @@ class ApiClient {
       API_CONFIG.ENDPOINTS.HISTORY.INSIGHTS(historyId),
       { method: 'GET' }
     )
+  }
+
+  // AutoML endpoints
+  async getAutoMLFiles(limit: number = 200, offset: number = 0): Promise<AutoMLFilesResponse> {
+    const params = new URLSearchParams({
+      limit: limit.toString(),
+      offset: offset.toString(),
+    })
+
+    return this.request<AutoMLFilesResponse>(
+      `${API_CONFIG.ENDPOINTS.AUTOML.FILES}?${params}`,
+      { method: 'GET' }
+    )
+  }
+
+  async getAutoMLSchema(historyId: string): Promise<AutoMLSchemaResponse> {
+    return this.request<AutoMLSchemaResponse>(
+      API_CONFIG.ENDPOINTS.AUTOML.SCHEMA(historyId),
+      { method: 'GET' }
+    )
+  }
+
+  async trainAutoML(payload: AutoMLTrainRequest): Promise<AutoMLTrainResponse> {
+    return this.request<AutoMLTrainResponse>(
+      API_CONFIG.ENDPOINTS.AUTOML.TRAIN,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    )
+  }
+
+  async downloadAutoMLModel(runId: string, suggestedFileName?: string): Promise<void> {
+    const token = getToken()
+    const url = `${this.baseUrl}${API_CONFIG.ENDPOINTS.AUTOML.DOWNLOAD(runId)}`
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+
+    if (!response.ok) {
+      let data: any = null
+      try {
+        data = await response.json()
+      } catch {
+        data = null
+      }
+      throw {
+        status: response.status,
+        message: data?.detail || 'Failed to download model artifact',
+        data,
+      }
+    }
+
+    const blob = await response.blob()
+    const contentDisposition = response.headers.get('content-disposition') || ''
+    const headerMatch = contentDisposition.match(/filename="?([^"]+)"?/)
+    const filename = suggestedFileName || headerMatch?.[1] || `automl_model_${runId}.joblib`
+
+    const objectUrl = window.URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    window.URL.revokeObjectURL(objectUrl)
   }
 }
 
