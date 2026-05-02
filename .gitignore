@@ -63,6 +63,9 @@ logs/
 *.temp
 *.cache
 
+# AutoML artifacts
+backend/automl_artifacts/
+
 # Security
 *.pem
 *.key

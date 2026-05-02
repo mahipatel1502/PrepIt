@@ -50,3 +50,6 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# AutoML artifacts
+automl_artifacts/
